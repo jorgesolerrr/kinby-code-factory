@@ -98,7 +98,7 @@ healthy "$prefix-coder"
 
 step "Starting a private hub on kinby $kinby_sha"
 docker build --quiet --tag "$prefix-hub" "$kinby" >/dev/null
-docker run --detach --name "$prefix-hub" --network "$network" --env PYTHONUNBUFFERED=1 \
+docker run --detach --name "$prefix-hub" --network "$network" \
     --mount "type=bind,src=$hub_dir,dst=/hub" \
     --mount "type=bind,src=$kinby,dst=/source,readonly" \
     --mount "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock" \
@@ -145,7 +145,7 @@ step "Checking what the hub runs now"
 container="$(docker ps -q --filter "network=$network" --filter "volume=$prefix-workspace")"
 [ -n "$container" ] || fail "no container runs the adopted copy"
 docker exec "$container" python -m kinby.packages coder /instance >/dev/null
-docker exec "$container" python - <<'EOF'
+docker exec --interactive "$container" python - <<'EOF'
 from pathlib import Path
 
 from kinby.instance import load_instance
@@ -161,7 +161,11 @@ expected = {name: (True, {}) for name in ("implement-ready-issue", "babysit-pull
 assert found == expected, found
 print("routines:", found)
 EOF
-[ "$(fingerprint)" = "$before" ] || fail "files outside the routines, kinby.toml and package.yaml changed"
+after="$(fingerprint)"
+if [ "$after" != "$before" ]; then
+    diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
+    fail "files outside the routines, kinby.toml and package.yaml changed"
+fi
 docker exec "$container" test -d /instance/workspace/.git || fail "the workspace volume is not attached"
 
 step "Rehearsal passed"

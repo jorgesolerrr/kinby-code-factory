@@ -70,10 +70,13 @@ Each step says what it stops.
 6. **Adopt it.** Write the package selection to `coder-package.json`: id `coder`, distribution `kinby-code-factory`, version `{"url": "https://github.com/jorgesolerrr/kinby-code-factory", "sha": "$FACTORY"}`, and the text of `image/recipe.Dockerfile` as `image_recipe`. Preview, read the findings, then adopt and claim the signal path, so the registered webhook keeps its URL:
 
    ```sh
-   kinby hub adopt --connect <hub>/ws /hub/coder kinby-coder --package coder-package.json --preview
-   kinby hub adopt --connect <hub>/ws /hub/coder kinby-coder --package coder-package.json \
-     --relinquished --claim-signals
+   adopt="--connect <hub>/ws /hub/coder kinby-coder --package coder-package.json \
+     --relinquished --claim-signals --acknowledge-interrupting-stop"
+   kinby hub adopt $adopt --preview
+   kinby hub adopt $adopt
    ```
+
+   The container from step 5 runs without a control token, so it cannot drain, and the preview reports a legacy runtime. It started minutes ago and the freeze leaves it no ready issue, so acknowledging the interrupting stop interrupts nothing. Check that no kinby issue carries `ready-for-agent` before you adopt.
 
 7. **Hand updates to CI.** Rotate the hub's update token and set `KINBY_HUB_URL` (`wss://kinby.jorgesolerrr.dev/ws`), `KINBY_HUB_UPDATE_TOKEN` and `KINBY_CODER_INSTANCE_ID` as repository secrets in kinby and in this repository. Rerun this repository's CI on `main`. Its update rebuilds the coder through the hub from `$FACTORY` and proves the rollout path.
 
