@@ -161,11 +161,9 @@ expected = {name: (True, {}) for name in ("implement-ready-issue", "babysit-pull
 assert found == expected, found
 print("routines:", found)
 EOF
-after="$(fingerprint)"
-if [ "$after" != "$before" ]; then
-    diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
-    fail "files outside the routines, kinby.toml and package.yaml changed"
-fi
+# The instance runs meanwhile and may add memory traces. Every file it had must be unchanged.
+changed="$(comm -23 <(printf '%s\n' "$before") <(fingerprint))"
+[ -z "$changed" ] || { printf '%s\n' "$changed" >&2; fail "files the migration must keep changed"; }
 docker exec "$container" test -d /instance/workspace/.git || fail "the workspace volume is not attached"
 
 step "Rehearsal passed"
