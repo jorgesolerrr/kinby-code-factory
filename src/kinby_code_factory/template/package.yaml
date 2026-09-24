@@ -1,0 +1,73 @@
+# Software factory settings. kinby reads this file at the start of every routine run,
+# so an edit applies at the next run without a restart. A key it does not know is an error.
+
+secrets:
+  # The environment variable that holds the GitHub token. gh and git push run with its
+  # value as GH_TOKEN. The token itself lives in .env, never here.
+  github_token: GH_TOKEN
+
+implementation:
+  # The coding client that implements an issue: claude (Claude Code) or codex.
+  client: claude
+  # The model the client runs.
+  model: claude-opus-5-5
+  # Reasoning effort. Claude Code takes low, medium, high, xhigh or max.
+  # Codex takes none, minimal, low, medium, high or xhigh.
+  effort: high
+  # Wall-clock limit for implementing one issue. The client is killed when it runs out.
+  timeout_seconds: 3600
+  # Limit for resuming the same session to fix review findings or a failing check.
+  fix_timeout_seconds: 900
+
+review:
+  # Adversarial review before the pull request opens. Off: review happens on the
+  # pull request instead.
+  enabled: false
+  # Claude Code runs both review axes with this model and effort.
+  model: claude-fable-5-1
+  effort: high
+  # Review rounds before the pull request opens with any findings left listed on it.
+  round_limit: 2
+  # Limit for one review round.
+  timeout_seconds: 900
+
+babysitting:
+  # Answer review threads on agent pull requests. Off: every babysit wake is a no-work turn.
+  enabled: false
+  # Codex fixes review threads with this model and effort.
+  model: gpt-5.6-sol
+  effort: high
+  # Fix rounds per pull request before it goes to a human.
+  round_limit: 3
+  # Limit for one Codex fix round.
+  timeout_seconds: 900
+  # Limit for the Codex session that repairs a check the fix round broke.
+  checks_fix_timeout_seconds: 900
+
+checks:
+  # Commands that must pass, in order, before a pull request opens or a fix is pushed.
+  # Each runs in the workspace without a shell. One failure gets one repair attempt.
+  # These are the kinby repository's checks. Replace them with your repository's.
+  commands:
+    - uv run ruff check .
+    - uv run ruff format --check .
+    - uv run ty check
+    - uv run pytest
+  # Limit for each check command.
+  timeout_seconds: 900
+
+skills:
+  # Skills by name. An instance skill with the same name overrides the packaged one,
+  # and a packaged skill overrides a workspace skill.
+  # How to implement a ticket. The implementation prompt carries its body.
+  implement: implement-ticket
+  # How to write the pull request body. The implementation prompt carries its body.
+  pull_request: open-pr
+  # Whose Standards and Spec reviewer briefs the review follows.
+  review: adversarial-review
+
+commands:
+  # Limit for each git command the pipeline runs itself.
+  git_timeout_seconds: 900
+  # Limit for each gh command.
+  github_timeout_seconds: 60

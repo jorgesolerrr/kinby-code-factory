@@ -1,0 +1,11 @@
+.teach/
+.venv/
+.env
+.vscode/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/
+/logs/
+.scratch/
+.ruff_cache/
