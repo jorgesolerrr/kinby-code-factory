@@ -98,7 +98,7 @@ healthy "$prefix-coder"
 
 step "Starting a private hub on kinby $kinby_sha"
 docker build --quiet --tag "$prefix-hub" "$kinby" >/dev/null
-docker run --detach --name "$prefix-hub" --network "$network" \
+docker run --detach --name "$prefix-hub" --network "$network" --env PYTHONUNBUFFERED=1 \
     --mount "type=bind,src=$hub_dir,dst=/hub" \
     --mount "type=bind,src=$kinby,dst=/source,readonly" \
     --mount "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock" \
