@@ -1,0 +1,12 @@
+{
+  "id": "coder",
+  "display_name": "Software factory",
+  "description": "Implements GitHub issues labeled ready-for-agent with a coding client and opens their pull requests.",
+  "icon": "code",
+  "distribution": "kinby-code-factory",
+  "source": {
+    "url": "https://github.com/jorgesolerrr/kinby-code-factory",
+    "pin": "a full 40-character commit SHA of main"
+  },
+  "image_recipe": "image/recipe.Dockerfile"
+}

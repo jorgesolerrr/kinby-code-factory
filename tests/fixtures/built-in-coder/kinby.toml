@@ -1,0 +1,37 @@
+# The kinby coder: an instance whose workspace is the kinby repository itself.
+# Secrets live in .env (see .env.example), never here.
+id = "coder"
+
+[models]
+main = "anthropic:claude-sonnet-5"
+recap = "anthropic:claude-sonnet-5"
+
+[workspace]
+path = "workspace"
+source = "https://github.com/jorgesolerrr/kinby.git"
+
+[workspace.conventions]
+enabled = true
+instructions = ["AGENTS.md"]
+skills = [".claude/skills"]
+
+[memory]
+recap = "every-turn"
+
+[feedback]
+# Routine turns have nobody to answer.
+ask = "off"
+
+[serve]
+listen = "0.0.0.0:8787"
+
+[budgets]
+# One issue should not run past two hours or spend more than this in a day.
+seconds = 7200
+usd_per_day = 25.0
+
+[prices."anthropic:claude-sonnet-5"]
+input = 2.0
+output = 10.0
+cache_read = 0.2
+cache_write = 2.5

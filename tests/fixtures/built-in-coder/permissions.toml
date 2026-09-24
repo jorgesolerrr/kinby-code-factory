@@ -1,0 +1,21 @@
+# Permission policy. Changes apply at the next turn boundary.
+# The REPL asks before writes; the implement-ready-issue routine runs full-access.
+mode = "ask"
+ceiling = "full-access"
+
+[tools]
+
+[bash]
+deny = [
+    # Delete the instance home.
+    '''(?:^|[;&|\n]\s*)rm\s+-rf\s+(?:/instance|\$\{?KINBY_INSTANCE\}?)(?:/|\s|$)''',
+    # Rewrite Git history.
+    '''\bgit\s+(?:reset\s+--hard|rebase|filter-branch)\b''',
+    # Force-push Git history.
+    '''\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|-f(?:\s|$))''',
+    # Push straight to the default branch.
+    '''\bgit\s+push\b[^\n]*\bmain\b''',
+    # Delete or merge on GitHub.
+    '''\bgh\s+(?:repo\s+delete|pr\s+merge|issue\s+delete)\b''',
+]
+ask = []

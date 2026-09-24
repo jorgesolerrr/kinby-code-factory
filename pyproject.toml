@@ -1,0 +1,58 @@
+[project]
+name = "kinby-code-factory"
+version = "0.1.0"
+description = "The software factory package for kinby: implements GitHub issues and opens pull requests"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+# kinby is never pinned: the kinby already in the instance image satisfies it.
+dependencies = ["kinby"]
+
+[project.entry-points."kinby.packages"]
+coder = "kinby_code_factory:PACKAGE"
+
+[project.entry-points."kinby.skills"]
+coder = "kinby_code_factory:SKILLS"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+    "ty>=0.0.75",
+]
+
+[tool.uv.sources]
+# Development and CI run against kinby main. An image install passes --no-sources.
+kinby = { git = "https://github.com/jorgesolerrr/kinby", branch = "main" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+# A built-in coder as kinby shipped it, the migration's input. It imports kinby.factory.
+extend-exclude = ["tests/fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "ANN", "FBT", "TID"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kinby_code_factory"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Parse at the boundary. Any lives only in the module that reads raw input (CODING-STANDARD.md, Types)."
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "FBT"]
+
+[tool.ty.src]
+exclude = ["tests/fixtures"]
+
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+possibly-unresolved-reference = "error"

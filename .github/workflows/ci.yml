@@ -1,0 +1,71 @@
+# Checks every pull request and every push to main against kinby main. A green push to
+# main then builds the coder image from that commit, runs the package check inside it,
+# and updates the coder through the hub. A failure at any step deploys nothing.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      # The lock pins a kinby commit for local work; CI always takes kinby main.
+      - run: uv sync --upgrade-package kinby
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check
+      - run: uv run pytest
+
+  image:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      kinby-revision: ${{ steps.kinby.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: jorgesolerrr/kinby
+          path: kinby
+      - id: kinby
+        run: echo "revision=$(git -C kinby rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build the coder image from this commit
+        run: scripts/build-image.sh kinby "$GITHUB_SHA" kinby-coder:candidate
+      - name: Run the package check inside the image
+        run: docker run --rm --entrypoint kinby kinby-coder:candidate package check coder
+
+  update-coder:
+    needs: image
+    runs-on: ubuntu-latest
+    # One update at a time, in push order. An update the hub is running is never cancelled.
+    concurrency:
+      group: update-coder
+      cancel-in-progress: false
+    env:
+      # The hub's contract URL, ending /ws.
+      KINBY_HUB_URL: ${{ secrets.KINBY_HUB_URL }}
+    steps:
+      - name: Skip until the coder runs under the hub
+        if: env.KINBY_HUB_URL == ''
+        run: echo "::notice::KINBY_HUB_URL is not set, so this push updates nothing."
+      - if: env.KINBY_HUB_URL != ''
+        uses: astral-sh/setup-uv@v6
+      - name: Update the coder to this commit
+        if: env.KINBY_HUB_URL != ''
+        env:
+          KINBY_TOKEN: ${{ secrets.KINBY_HUB_UPDATE_TOKEN }}
+          KINBY_CODER_INSTANCE_ID: ${{ secrets.KINBY_CODER_INSTANCE_ID }}
+          KINBY_REVISION: ${{ needs.image.outputs.kinby-revision }}
+        # The kinby revision is the one the image was checked against. The hub builds
+        # it from its own checkout, which has to have fetched it.
+        run: >-
+          uvx --from "git+https://github.com/jorgesolerrr/kinby@$KINBY_REVISION" kinby hub update
+          --connect "$KINBY_HUB_URL" "$KINBY_CODER_INSTANCE_ID"
+          --revision "$KINBY_REVISION"
+          --package coder --package-commit "$GITHUB_SHA"
