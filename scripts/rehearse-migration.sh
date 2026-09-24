@@ -58,7 +58,7 @@ as_root "cp /work/dummy.env /work/hub/coder/.env && chmod 600 /work/hub/coder/.e
 fingerprint() {
     as_root "cd /work/hub/coder && find . -path ./workspace -prune -o -path ./.state -prune \
         -o -type f ! -name .env ! -name kinby.toml ! -name package.yaml \
-        ! -path './routines/*' -print | sort | xargs sha256sum"
+        ! -path './routines/*' -print | xargs sha256sum" | LC_ALL=C sort
 }
 before="$(fingerprint)"
 
@@ -162,7 +162,7 @@ assert found == expected, found
 print("routines:", found)
 EOF
 # The instance runs meanwhile and may add memory traces. Every file it had must be unchanged.
-changed="$(comm -23 <(printf '%s\n' "$before") <(fingerprint))"
+changed="$(LC_ALL=C comm -23 <(printf '%s\n' "$before") <(fingerprint))"
 [ -z "$changed" ] || { printf '%s\n' "$changed" >&2; fail "files the migration must keep changed"; }
 docker exec "$container" test -d /instance/workspace/.git || fail "the workspace volume is not attached"
 
