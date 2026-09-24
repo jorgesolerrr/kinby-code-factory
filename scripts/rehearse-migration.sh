@@ -127,11 +127,14 @@ print(json.dumps({
 EOF
 as_root "cp /work/coder-package.json /work/hub/coder-package.json"
 hub() { docker exec --env "KINBY_TOKEN=$1" "$prefix-hub" kinby hub "${@:2}"; }
-adopt=(adopt --connect "$url" /hub/coder "$prefix-coder" --package /hub/coder-package.json)
-hub "$access" "${adopt[@]}" --preview --relinquished --claim-signals >"$work/preview.json" \
+# The container runs without a control token, so it cannot drain. It has just started and
+# the freeze leaves it no ready issue, so the handoff interrupts nothing.
+adopt=(adopt --connect "$url" /hub/coder "$prefix-coder" --package /hub/coder-package.json
+    --relinquished --claim-signals --acknowledge-interrupting-stop)
+hub "$access" "${adopt[@]}" --preview >"$work/preview.json" \
     || { cat "$work/preview.json"; fail "the preview found a blocking finding"; }
 instance_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["instance_id"])' "$work/preview.json")"
-hub "$access" "${adopt[@]}" --relinquished --claim-signals
+hub "$access" "${adopt[@]}"
 
 step "Updating the adopted copy to the package commit through the hub"
 update_token="$(docker exec "$prefix-hub" kinby hub /hub update-token rotate | sed -n 's/^update token: //p')"
