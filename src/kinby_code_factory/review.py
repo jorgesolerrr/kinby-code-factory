@@ -19,6 +19,7 @@ from kinby_code_factory.clients import (
     review_with_claude,
 )
 from kinby_code_factory.repository import BranchName
+from kinby_code_factory.runs import RunReporter
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ def run_review_loop(
     round_limit: int,
     review_timeout_seconds: float,
     fix_timeout_seconds: float,
+    reporter: RunReporter,
     implementer_client: CodingClient = CodingClient.CODEX,
 ) -> ReviewLoop:
     """Review and fix until clean or the configured review cap is reached."""
@@ -72,6 +74,7 @@ def run_review_loop(
             model=reviewer_model,
             effort=reviewer_effort,
             timeout_seconds=review_timeout_seconds,
+            reporter=reporter,
         )
         findings = review.findings
         should_fix = bool(findings.hard) or bool(findings.suggestions and not rounds)
@@ -100,6 +103,7 @@ def run_review_loop(
             model=implementer_model,
             effort=implementer_effort,
             timeout_seconds=fix_timeout_seconds,
+            reporter=reporter,
         )
         rounds.append(
             ReviewRound(

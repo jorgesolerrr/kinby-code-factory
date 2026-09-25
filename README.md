@@ -8,6 +8,8 @@ The software factory for [kinby](https://github.com/jorgesolerrr/kinby). An inst
 | Display name | Software factory |
 | Distribution | `kinby-code-factory` |
 
+Kinby records each coding run as a delegated run in the turn that started it, with its usage source, tokens and outcome, so `kinby usage` and `kinby stats` show what the factory spent on each subscription. A run that hits its plan limit is recorded as limited, with the time the plan resets.
+
 The distribution ships the routines' code steps, the skills they use, and an instance template. An instance copies the template once: its prompts, permissions, routines and `package.yaml` are then yours to edit, and a package update never rewrites them.
 
 ## What it needs

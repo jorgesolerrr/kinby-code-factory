@@ -67,7 +67,8 @@ def test_opus_implements_and_repairs_checks_in_the_same_session(
         arguments = _arguments(call)
         assert arguments[arguments.index("--model") + 1] == "claude-opus-5-5"
         assert arguments[arguments.index("--effort") + 1] == "high"
-        assert arguments[arguments.index("--output-format") + 1] == "json"
+        assert arguments[arguments.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in arguments
         assert arguments[arguments.index("--permission-mode") + 1] == "acceptEdits"
         assert "--no-session-persistence" not in arguments
         assert call["api_key"] is None

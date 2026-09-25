@@ -242,7 +242,16 @@ if os.environ.get("FAKE_CODEX_WRITE_BODY", "1") == "1":
     (scratch / "pr-body.md").write_text(
         (responses / "pr-body.md").read_text(encoding="utf-8"), encoding="utf-8"
     )
-print((responses / "codex-events.jsonl").read_text(encoding="utf-8"))
+resumed_events = responses / "codex-resume-events.jsonl"
+events_path = (
+    resumed_events
+    if "resume" in arguments and resumed_events.exists()
+    else responses / "codex-events.jsonl"
+)
+events = events_path.read_text(encoding="utf-8")
+print(events)
+# Codex exits non-zero after a failed turn, with the events already written.
+raise SystemExit(1 if '"turn.failed"' in events else 0)
 """,
     )
     _write_executable(
@@ -255,7 +264,19 @@ record["stdin"] = prompt
 record["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
 with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
-if "--output-format" in arguments:
+
+# The stream reaches stdout as the run goes, before any sleep and before the result.
+if (events := responses / "claude-events.jsonl").exists():
+    print(events.read_text(encoding="utf-8"), end="", flush=True)
+
+
+def emit(result):
+    print(json.dumps(result))
+    # Claude exits non-zero after an error result, with the stream already written.
+    raise SystemExit(1 if result.get("is_error") else 0)
+
+
+if "Review axis:" not in prompt:
     resumed = "--resume" in arguments
     time.sleep(float(os.environ.get("FAKE_CLAUDE_IMPLEMENT_SLEEP", "0")))
     if exit_code := int(os.environ.get("FAKE_CLAUDE_IMPLEMENT_EXIT", "0")):
@@ -267,13 +288,14 @@ if "--output-format" in arguments:
         (scratch / "pr-body.md").write_text(
             (responses / "pr-body.md").read_text(encoding="utf-8"), encoding="utf-8"
         )
+    resumed_result = responses / "claude-resume-result.json"
+    result_path = (
+        resumed_result if resumed and resumed_result.exists() else responses / "claude-result.json"
+    )
+    result = json.loads(result_path.read_text(encoding="utf-8"))
     if resumed and os.environ.get("FAKE_CLAUDE_WRONG_SESSION"):
-        result = json.loads((responses / "claude-result.json").read_text(encoding="utf-8"))
         result["session_id"] = "wrong-session"
-        print(json.dumps(result))
-    else:
-        print((responses / "claude-result.json").read_text(encoding="utf-8"))
-    raise SystemExit(0)
+    emit(result)
 if os.environ.get("FAKE_CLAUDE_REQUIRE_PARALLEL") == "1":
     axis = "standards" if "Review axis: standards" in prompt else "spec"
     peer = "spec" if axis == "standards" else "standards"
@@ -294,7 +316,24 @@ fixes = sum(
 )
 numbered = responses / f"review-{axis}-{fixes}.md"
 path = numbered if numbered.exists() else responses / f"review-{axis}.md"
-print(path.read_text(encoding="utf-8"))
+emit(
+    {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": path.read_text(encoding="utf-8"),
+        "session_id": f"review-{axis}",
+        "num_turns": 5,
+        "modelUsage": {
+            "claude-fable-5-1": {
+                "inputTokens": 4,
+                "outputTokens": 30,
+                "cacheReadInputTokens": 60,
+                "cacheCreationInputTokens": 16,
+            }
+        },
+    }
+)
 """,
     )
     for command in ("git", "uv"):
@@ -383,8 +422,9 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
         (canned / f"review-{axis}.md").write_text("No findings", encoding="utf-8")
     (canned / "codex-events.jsonl").write_text(
         '{"type":"thread.started","thread_id":"thread-184"}\n'
+        '{"type":"turn.started"}\n'
         '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":80,'
-        '"output_tokens":35}}',
+        '"cache_write_input_tokens":6,"output_tokens":35,"reasoning_output_tokens":12}}',
         encoding="utf-8",
     )
     (canned / "claude-result.json").write_text(
@@ -393,12 +433,30 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
+                "result": "Implemented the ticket.",
                 "session_id": "claude-session-184",
+                "num_turns": 7,
+                "total_cost_usd": 1.25,
                 "usage": {
                     "input_tokens": 2,
                     "cache_read_input_tokens": 80,
                     "cache_creation_input_tokens": 38,
                     "output_tokens": 35,
+                },
+                # The main model plus a subagent on another model.
+                "modelUsage": {
+                    "claude-opus-5-5": {
+                        "inputTokens": 2,
+                        "outputTokens": 35,
+                        "cacheReadInputTokens": 80,
+                        "cacheCreationInputTokens": 38,
+                    },
+                    "claude-haiku-4-5": {
+                        "inputTokens": 10,
+                        "outputTokens": 5,
+                        "cacheReadInputTokens": 20,
+                        "cacheCreationInputTokens": 0,
+                    },
                 },
             }
         ),
@@ -443,6 +501,16 @@ def _report(output: str) -> dict[str, object]:
     value = json.loads(result_line.partition(": ")[2])
     assert isinstance(value, dict)
     return value
+
+
+def _delegated_runs(instance: Path, capsys: pytest.CaptureFixture[str]) -> list[dict[str, str]]:
+    """The delegated runs `kinby usage` lists, one mapping of its fields per run."""
+    assert main(["usage", "--instance", str(instance)]) == 0
+    return [
+        dict(field.split("=", 1) for field in line.partition(": ")[2].split())
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip().startswith("delegated run ")
+    ]
 
 
 def _run_labeled_delivery(instance: Path, tmp_path: Path, issue: int) -> int:

@@ -24,22 +24,33 @@ class CommandError(RuntimeError):
 
 
 class CommandFailed(CommandError):
-    """A subprocess exited with a non-zero status."""
+    """A subprocess exited with a non-zero status, keeping what it wrote to stdout."""
 
-    def __init__(self, command: tuple[str, ...], returncode: int, output: str) -> None:
+    def __init__(
+        self,
+        command: tuple[str, ...],
+        returncode: int,
+        output: str,
+        *,
+        stdout: str,
+        duration_seconds: float,
+    ) -> None:
         self.command = command
         self.returncode = returncode
         self.output = output
+        self.stdout = stdout
+        self.duration_seconds = duration_seconds
         name = command[0] if command else "command"
         super().__init__(f"{name} exited with status {returncode}: {output or 'no output'}")
 
 
 class CommandTimedOut(CommandError):
-    """A subprocess exceeded its wall-clock limit and was killed."""
+    """A subprocess exceeded its wall-clock limit and was killed, keeping what it had written."""
 
-    def __init__(self, command: tuple[str, ...], timeout_seconds: float) -> None:
+    def __init__(self, command: tuple[str, ...], timeout_seconds: float, *, stdout: str) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds
+        self.stdout = stdout
         name = command[0] if command else "command"
         super().__init__(f"{name} exceeded its {timeout_seconds:g}-second limit and was killed")
 
@@ -80,10 +91,12 @@ def run_command(
     except subprocess.TimeoutExpired:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
-        raise CommandTimedOut(command, timeout_seconds) from None
+        stdout, _ = process.communicate()
+        raise CommandTimedOut(command, timeout_seconds, stdout=stdout) from None
     duration = monotonic() - started_at
     if process.returncode:
         output = stderr.strip() or stdout.strip()
-        raise CommandFailed(command, process.returncode, output)
+        raise CommandFailed(
+            command, process.returncode, output, stdout=stdout, duration_seconds=duration
+        )
     return CommandResult(stdout, stderr, duration)

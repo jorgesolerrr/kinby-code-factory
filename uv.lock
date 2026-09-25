@@ -512,7 +512,7 @@ wheels = [
 [[package]]
 name = "kinby"
 version = "0.1.0"
-source = { git = "https://github.com/jorgesolerrr/kinby?branch=main#7845b0d4f7b236133f8f4726952e057719b645f9" }
+source = { git = "https://github.com/jorgesolerrr/kinby?branch=main#3cebf8298655167917b1fe6b6d4e8ebae3954f78" }
 dependencies = [
     { name = "aiohttp" },
     { name = "cronsim" },

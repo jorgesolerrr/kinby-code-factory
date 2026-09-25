@@ -1,5 +1,6 @@
 """Babysit reviews on agent pull requests."""
 
+import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, NewType
@@ -50,6 +51,7 @@ from kinby_code_factory.repository import (
     ReviewThread,
     github_environment,
 )
+from kinby_code_factory.runs import RunReporter, tool_run_reporter
 
 MERGE_READY_LABEL = LabelName("merge-ready")
 BabysitWarning = NewType("BabysitWarning", str)
@@ -126,11 +128,20 @@ def is_merge_ready(pull_request: BabysitPullRequest, coder: GitHubLogin) -> bool
 
 
 @tool(write=True)
-def babysit_pull_request(signal: dict[str, object], context: ToolContext) -> str | None:
+async def babysit_pull_request(signal: dict[str, object], context: ToolContext) -> str | None:
     """Scan agent pull requests and label a completed babysitting outcome.
 
     With babysitting off in package.yaml, every wake is a no-work turn.
     """
+    reporter = tool_run_reporter(context)
+    return await asyncio.to_thread(_babysit_pull_request, signal, context, reporter)
+
+
+def _babysit_pull_request(
+    signal: dict[str, object],
+    context: ToolContext,
+    reporter: RunReporter,
+) -> str | None:
     config = factory_config(context)
     babysitting = config.babysitting
     if not babysitting.enabled:
@@ -194,6 +205,7 @@ def babysit_pull_request(signal: dict[str, object], context: ToolContext) -> str
                 metadata.default_branch,
                 babysitting,
                 config.checks,
+                reporter,
             )
         )
     return _reports_json(reports)
@@ -285,6 +297,7 @@ def _run_fix_round(
     default_branch: BranchName,
     babysitting: Babysitting,
     repository_checks: Checks,
+    reporter: RunReporter,
 ) -> BabysitReport:
     workspace = git.workspace
     round_limit = babysitting.round_limit
@@ -310,6 +323,7 @@ def _run_fix_round(
             model=babysitting.model,
             effort=babysitting.effort,
             timeout_seconds=babysitting.timeout_seconds,
+            reporter=reporter,
         )
         codex = fix.codex
         try:
@@ -320,6 +334,7 @@ def _run_fix_round(
                 model=babysitting.model,
                 effort=babysitting.effort,
                 timeout_seconds=babysitting.checks_fix_timeout_seconds,
+                reporter=reporter,
             )
         except ChecksFixFailed as exc:
             checks = exc.checks
