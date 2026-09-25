@@ -3,15 +3,23 @@
 import json
 import os
 import re
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import NewType
 
+from kinby.contracts import DelegatedRunOutcome, UsageSource
 from kinby.plugins import Skill
 
-from kinby_code_factory.process import run_command
+from kinby_code_factory.process import (
+    CommandFailed,
+    CommandResult,
+    CommandTimedOut,
+    run_command,
+)
 from kinby_code_factory.repository import (
     IssueNumber,
     IssueTitle,
@@ -19,6 +27,7 @@ from kinby_code_factory.repository import (
     ReviewThread,
     ReviewThreadId,
 )
+from kinby_code_factory.runs import ClientRun, ModelTokens, RunReporter
 
 PR_BODY = Path(".scratch/pr-body.md")
 REVIEW_REPLIES = Path(".scratch/review-replies.json")
@@ -33,6 +42,10 @@ _FINDING = re.compile(
     re.IGNORECASE,
 )
 _NO_FINDINGS = re.compile(r"^[\s*_`]*no findings[\s*_`.!]*$", re.IGNORECASE)
+# Codex names the reset in local time: "try again at 3:05 PM." or "at Sep 26th, 2026 3:05 PM."
+_CODEX_RETRY = re.compile(r"try again at ([^.]+)\.")
+_ORDINAL_DAY = re.compile(r"(\d+)(?:st|nd|rd|th),")
+_CLAUDE_CODE = "claude-code"
 _REVIEW_EXCERPT_CHARACTERS = 400
 _ANSWER_SHAPE = (
     "Answer with the findings only, one per line, plain tags without Markdown emphasis. "
@@ -136,6 +149,7 @@ def run_implementation(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
 ) -> CodingRun:
     """Implement one issue with the selected coding client."""
     prompt = _prompt(issue_number, issue_title, issue_url, skills)
@@ -146,6 +160,7 @@ def run_implementation(
             model=model,
             effort=effort,
             timeout_seconds=timeout_seconds,
+            reporter=reporter,
         )
     return _run_claude(
         workspace,
@@ -153,6 +168,7 @@ def run_implementation(
         model=model,
         effort=effort,
         timeout_seconds=timeout_seconds,
+        reporter=reporter,
     )
 
 
@@ -165,6 +181,7 @@ def fix_implementation(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
 ) -> CodingRun:
     """Resume the same coding client session to repair a change."""
     if client is CodingClient.CODEX:
@@ -175,6 +192,7 @@ def fix_implementation(
             model=model,
             effort=effort,
             timeout_seconds=timeout_seconds,
+            reporter=reporter,
         )
     return _run_claude(
         workspace,
@@ -182,6 +200,7 @@ def fix_implementation(
         model=model,
         effort=effort,
         timeout_seconds=timeout_seconds,
+        reporter=reporter,
         thread_id=thread_id,
     )
 
@@ -193,6 +212,7 @@ def _run_claude(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
     thread_id: CodingSessionId | None = None,
 ) -> CodingRun:
     _require_claude_effort(effort)
@@ -210,23 +230,80 @@ def _run_claude(
         "none",
         "--allowedTools",
         "Read,Write,Edit,Bash,Glob,Grep,Skill",
-        "--output-format",
-        "json",
     )
     if thread_id is not None:
         command += ("--resume", thread_id)
-    result = run_command(
+    result, duration_seconds = _run_claude_command(
         command,
         cwd=workspace,
         timeout_seconds=timeout_seconds,
         stdin=prompt,
-        env={name: value for name, value in os.environ.items() if name != _API_KEY},
+        reporter=reporter,
+        model=model,
+        keeps_session=True,
     )
-    session_id, usage = _claude_result(result.stdout)
+    session_id, usage = _claude_session(result)
     if thread_id is not None and session_id != thread_id:
         raise CodingClientError("Claude resumed a different session")
     _require_pr_body(workspace)
-    return CodingRun(session_id, usage, result.duration_seconds, CodingClient.CLAUDE)
+    return CodingRun(session_id, usage, duration_seconds, CodingClient.CLAUDE)
+
+
+def _run_claude_command(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    stdin: str,
+    reporter: RunReporter,
+    model: CodingModel,
+    keeps_session: bool,
+) -> tuple[dict[str, object], float]:
+    """Run Claude on the subscription, report the run, and return its successful result."""
+    command += ("--output-format", "stream-json", "--verbose")
+    try:
+        result = _run_reported(
+            command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            stdin=stdin,
+            env={name: value for name, value in os.environ.items() if name != _API_KEY},
+            reporter=reporter,
+            observe=lambda stdout, duration: _claude_run(
+                stdout, duration, model, keeps_session=keeps_session
+            ),
+        )
+    except CommandFailed as exc:
+        # Claude exits non-zero after an error result; the result says why.
+        if _claude_final_event(exc.stdout) is None:
+            raise
+        return _claude_success(exc.stdout), exc.duration_seconds
+    return _claude_success(result.stdout), result.duration_seconds
+
+
+def _run_reported(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    stdin: str,
+    reporter: RunReporter,
+    observe: Callable[[str, float], ClientRun],
+    env: Mapping[str, str] | None = None,
+) -> CommandResult:
+    """Run one coding client and report the run as soon as it ends, however it ends."""
+    try:
+        result = run_command(
+            command, cwd=cwd, timeout_seconds=timeout_seconds, stdin=stdin, env=env
+        )
+    except CommandFailed as exc:
+        reporter.report(observe(exc.stdout, exc.duration_seconds))
+        raise
+    except CommandTimedOut as exc:
+        reporter.report(observe("", exc.timeout_seconds))
+        raise
+    reporter.report(observe(result.stdout, result.duration_seconds))
+    return result
 
 
 def _require_claude_effort(effort: ReasoningEffort) -> None:
@@ -240,29 +317,108 @@ def _require_claude_effort(effort: ReasoningEffort) -> None:
         raise CodingClientError(f"Claude does not support reasoning effort {effort}")
 
 
-def _claude_result(source: str) -> tuple[CodingSessionId, TokenUsage]:
+def _claude_success(source: str) -> dict[str, object]:
+    """The final result of a Claude stream, which must be a success."""
+    lines = [line for line in source.splitlines() if line.strip()]
     try:
-        result = json.loads(source)
+        result = json.loads(lines[-1]) if lines else None
     except json.JSONDecodeError as exc:
         raise CodingClientError(f"Claude returned invalid JSON: {exc}") from exc
     if not isinstance(result, dict) or result.get("type") != "result":
         raise CodingClientError("Claude returned an invalid result")
     if result.get("is_error") is not False or result.get("subtype") != "success":
         raise CodingClientError(f"Claude failed: {str(result.get('result', 'no result'))[:400]}")
+    return result
+
+
+def _claude_final_event(source: str) -> dict[str, object] | None:
+    return next(
+        (event for event in reversed(_json_events(source)) if event.get("type") == "result"),
+        None,
+    )
+
+
+def _claude_run(
+    source: str,
+    duration_seconds: float,
+    model: CodingModel,
+    *,
+    keeps_session: bool,
+) -> ClientRun:
+    """What a Claude stream says about its run, whatever state the stream is in.
+
+    Tokens come from ``modelUsage``, which covers subagents; ``usage`` covers the main loop only.
+    """
+    events = _json_events(source)
+    result = _claude_final_event(source)
+    succeeded = (
+        result is not None
+        and result.get("is_error") is False
+        and result.get("subtype") == "success"
+    )
+    resets_at = next(
+        (
+            datetime.fromtimestamp(reset, UTC)
+            for event in events
+            if event.get("type") == "rate_limit_event"
+            and isinstance(info := event.get("rate_limit_info"), dict)
+            and info.get("status") == "rejected"
+            and type(reset := info.get("resetsAt")) is int
+        ),
+        None,
+    )
+    session = result.get("session_id") if result is not None else None
+    turns = result.get("num_turns") if result is not None else None
+    return ClientRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client=_CLAUDE_CODE,
+        model=model,
+        session=session if keeps_session and isinstance(session, str) else None,
+        tokens=_claude_model_tokens(result.get("modelUsage")) if result is not None else None,
+        duration_seconds=duration_seconds,
+        client_turns=turns if type(turns) is int and turns >= 0 else 0,
+        outcome=_outcome(succeeded=succeeded, resets_at=resets_at),
+        resets_at=None if succeeded else resets_at,
+    )
+
+
+def _claude_model_tokens(model_usage: object) -> dict[str, ModelTokens] | None:
+    if not isinstance(model_usage, dict):
+        return None
+    tokens: dict[str, ModelTokens] = {}
+    for model, usage in model_usage.items():
+        if not isinstance(usage, dict):
+            continue
+        uncached, output, read, created = (
+            _count(usage.get(name))
+            for name in (
+                "inputTokens",
+                "outputTokens",
+                "cacheReadInputTokens",
+                "cacheCreationInputTokens",
+            )
+        )
+        tokens[model] = ModelTokens(uncached + read + created, output, read, created)
+    return tokens
+
+
+def _claude_session(result: dict[str, object]) -> tuple[CodingSessionId, TokenUsage]:
+    """The session a successful Claude result belongs to, and its main-loop usage."""
     if not isinstance(session_id := result.get("session_id"), str) or not session_id:
         raise CodingClientError("Claude returned no session id")
     if not isinstance(usage := result.get("usage"), dict):
         raise CodingClientError("Claude returned no usage")
     counts = [
-        usage.get(name)
+        count
         for name in (
             "input_tokens",
             "cache_read_input_tokens",
             "cache_creation_input_tokens",
             "output_tokens",
         )
+        if type(count := usage.get(name)) is int and count >= 0
     ]
-    if any(type(count) is not int or count < 0 for count in counts):
+    if len(counts) != 4:
         raise CodingClientError("Claude returned invalid usage")
     input_tokens, cached, created, output_tokens = counts
     return CodingSessionId(session_id), TokenUsage(
@@ -277,14 +433,17 @@ def run_codex(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
 ) -> CodingRun:
     """Run Codex once for one issue."""
     _clear_generated_file(workspace, PR_BODY, "pull request body")
-    result = run_command(
+    result = _run_codex_command(
         _fresh_codex_command(workspace, model, effort),
         cwd=workspace,
         timeout_seconds=timeout_seconds,
         stdin=prompt,
+        reporter=reporter,
+        model=model,
     )
     thread_id, usage = _codex_events(result.stdout)
     _require_pr_body(workspace)
@@ -299,10 +458,11 @@ def fix_with_codex(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
 ) -> CodingRun:
     """Resume the implementing Codex thread to address review findings."""
     _clear_generated_file(workspace, PR_BODY, "pull request body")
-    result = run_command(
+    result = _run_codex_command(
         (
             "codex",
             "exec",
@@ -319,6 +479,8 @@ def fix_with_codex(
         cwd=workspace,
         timeout_seconds=timeout_seconds,
         stdin=_fix_prompt(findings),
+        reporter=reporter,
+        model=model,
     )
     resumed_thread_id, usage = _codex_events(result.stdout)
     if resumed_thread_id != thread_id:
@@ -334,14 +496,17 @@ def fix_review_threads_with_codex(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
 ) -> ReviewFixRun:
     """Run a fresh Codex turn for actionable pull request threads."""
     _clear_generated_file(workspace, REVIEW_REPLIES, "review replies")
-    result = run_command(
+    result = _run_codex_command(
         _fresh_codex_command(workspace, model, effort),
         cwd=workspace,
         timeout_seconds=timeout_seconds,
         stdin=_review_threads_prompt(threads),
+        reporter=reporter,
+        model=model,
     )
     thread_id, usage = _codex_events(result.stdout)
     replies = _review_replies(workspace, threads)
@@ -361,8 +526,9 @@ def review_with_claude(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
 ) -> ReviewRun:
-    """Run fresh standards and spec reviews in parallel."""
+    """Run fresh standards and spec reviews in parallel, reporting each as it finishes."""
     _require_claude_effort(effort)
     ticket_path = workspace / TICKET_BODY
     ticket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,11 +540,10 @@ def review_with_claude(
         _standards_prompt(workspace, base_branch, review_skill, conventions),
         _spec_prompt(workspace, base_branch, ticket_path, review_skill),
     )
-    subscription_env = {name: value for name, value in os.environ.items() if name != _API_KEY}
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
             executor.submit(
-                run_command,
+                _run_claude_command,
                 (
                     "claude",
                     "-p",
@@ -397,19 +562,24 @@ def review_with_claude(
                 cwd=workspace,
                 timeout_seconds=timeout_seconds,
                 stdin=prompt,
-                env=subscription_env,
+                reporter=reporter,
+                model=model,
+                keeps_session=False,
             )
             for prompt in prompts
         ]
         results = [future.result() for future in futures]
-    axes = tuple(_findings(result.stdout) for result in results)
+    axes = tuple(
+        _findings(answer if isinstance(answer := result.get("result"), str) else "")
+        for result, _ in results
+    )
     return ReviewRun(
         Findings(
             tuple(finding for axis in axes for finding in axis.hard),
             tuple(finding for axis in axes for finding in axis.suggestions),
             "\n\n".join(axis.raw for axis in axes),
         ),
-        max(result.duration_seconds for result in results),
+        max(duration_seconds for _, duration_seconds in results),
     )
 
 
@@ -603,6 +773,135 @@ def _require_pr_body(workspace: Path) -> None:
             raise CodingClientError("Coding client did not write a pull request body")
     except OSError as exc:
         raise CodingClientError(f"could not read pull request body: {exc}") from exc
+
+
+def _run_codex_command(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    stdin: str,
+    reporter: RunReporter,
+    model: CodingModel,
+) -> CommandResult:
+    return _run_reported(
+        command,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        stdin=stdin,
+        reporter=reporter,
+        observe=lambda stdout, duration: _codex_run(stdout, duration, model),
+    )
+
+
+def _codex_run(source: str, duration_seconds: float, model: CodingModel) -> ClientRun:
+    """What a Codex event stream says about its run, whatever state the stream is in.
+
+    ``turn.completed.usage`` is the thread's running total; the reporter subtracts the
+    previous reading when a thread is resumed.
+    """
+    events = _json_events(source)
+    thread_id = next(
+        (
+            thread
+            for event in events
+            if event.get("type") == "thread.started"
+            and isinstance(thread := event.get("thread_id"), str)
+        ),
+        None,
+    )
+    completed = [event for event in events if event.get("type") == "turn.completed"]
+    failures = [
+        message
+        for event in events
+        if event.get("type") in {"turn.failed", "error"}
+        and isinstance(
+            message := (
+                error.get("message")
+                if isinstance(error := event.get("error"), dict)
+                else event.get("message")
+            ),
+            str,
+        )
+    ]
+    usage = completed[-1].get("usage") if completed else None
+    tokens: dict[str, ModelTokens] | None = (
+        {
+            model: ModelTokens(
+                input_tokens=_count(usage.get("input_tokens")),
+                output_tokens=_count(usage.get("output_tokens")),
+                cache_read_tokens=_count(usage.get("cached_input_tokens")),
+                cache_creation_tokens=_count(usage.get("cache_write_input_tokens")),
+            )
+        }
+        if isinstance(usage, dict)
+        else None
+    )
+    succeeded = bool(completed) and not failures
+    resets_at = next(
+        (
+            reset
+            for message in failures
+            if "usage limit" in message.lower() and (reset := _codex_reset(message)) is not None
+        ),
+        None,
+    )
+    return ClientRun(
+        usage_source=UsageSource.CHATGPT_SUBSCRIPTION,
+        client=CodingClient.CODEX,
+        model=model,
+        session=thread_id,
+        tokens=tokens,
+        duration_seconds=duration_seconds,
+        client_turns=sum(
+            event.get("type") in {"turn.completed", "turn.failed"} for event in events
+        ),
+        outcome=_outcome(succeeded=succeeded, resets_at=resets_at),
+        resets_at=None if succeeded else resets_at,
+    )
+
+
+def _codex_reset(message: str) -> datetime | None:
+    """The reset time a Codex usage-limit message names, read in this machine's time zone."""
+    match = _CODEX_RETRY.search(message)
+    if match is None:
+        return None
+    stamp = _ORDINAL_DAY.sub(r"\1,", match.group(1).strip())
+    try:
+        return datetime.strptime(stamp, "%b %d, %Y %I:%M %p").astimezone()
+    except ValueError:
+        pass
+    try:
+        at = datetime.strptime(stamp, "%I:%M %p").time()
+    except ValueError:
+        return None
+    return datetime.combine(date.today(), at).astimezone()
+
+
+def _outcome(*, succeeded: bool, resets_at: datetime | None) -> DelegatedRunOutcome:
+    if succeeded:
+        return DelegatedRunOutcome.COMPLETED
+    # Kinby needs a reset time for a limited run; a limit without one counts as a failure.
+    if resets_at is not None:
+        return DelegatedRunOutcome.LIMITED
+    return DelegatedRunOutcome.FAILED
+
+
+def _json_events(source: str) -> list[dict[str, object]]:
+    """Every JSON object line in a client's event stream, skipping anything else."""
+    events: list[dict[str, object]] = []
+    for line in source.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _count(value: object) -> int:
+    return value if type(value) is int and value >= 0 else 0
 
 
 def _codex_events(source: str) -> tuple[CodingSessionId, TokenUsage]:

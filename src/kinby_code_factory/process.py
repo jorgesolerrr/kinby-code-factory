@@ -24,12 +24,22 @@ class CommandError(RuntimeError):
 
 
 class CommandFailed(CommandError):
-    """A subprocess exited with a non-zero status."""
+    """A subprocess exited with a non-zero status, keeping what it wrote to stdout."""
 
-    def __init__(self, command: tuple[str, ...], returncode: int, output: str) -> None:
+    def __init__(
+        self,
+        command: tuple[str, ...],
+        returncode: int,
+        output: str,
+        *,
+        stdout: str,
+        duration_seconds: float,
+    ) -> None:
         self.command = command
         self.returncode = returncode
         self.output = output
+        self.stdout = stdout
+        self.duration_seconds = duration_seconds
         name = command[0] if command else "command"
         super().__init__(f"{name} exited with status {returncode}: {output or 'no output'}")
 
@@ -85,5 +95,7 @@ def run_command(
     duration = monotonic() - started_at
     if process.returncode:
         output = stderr.strip() or stdout.strip()
-        raise CommandFailed(command, process.returncode, output)
+        raise CommandFailed(
+            command, process.returncode, output, stdout=stdout, duration_seconds=duration
+        )
     return CommandResult(stdout, stderr, duration)

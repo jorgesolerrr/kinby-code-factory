@@ -37,6 +37,7 @@ from kinby_code_factory.repository import (
 from tests.test_factory import (
     _arguments,
     _coder_copy,
+    _delegated_runs,
     _mapping,
     _records,
     _RoutineModel,
@@ -319,8 +320,11 @@ if "resume" in arguments:
     (Path.cwd() / ".scratch" / "pr-body.md").write_text("Checks fixed.\\n", encoding="utf-8")
 (Path.cwd() / "fixed.py").write_text("fixed = True\\n", encoding="utf-8")
 print('{"type":"thread.started","thread_id":"thread-fix-226"}')
-print('{"type":"turn.completed","usage":{"input_tokens":90,'
-      '"cached_input_tokens":60,"output_tokens":25}}')
+if "resume" in arguments and (usage := os.environ.get("FAKE_CODEX_RESUME_USAGE")):
+    print('{"type":"turn.completed","usage":' + usage + '}')
+else:
+    print('{"type":"turn.completed","usage":{"input_tokens":90,'
+          '"cached_input_tokens":60,"output_tokens":25}}')
 """,
     )
     _write_executable(
@@ -1208,6 +1212,47 @@ def test_one_checks_fix_can_recover_the_round(
         ["run", "pytest"],
     ]
     assert ["push"] in [_arguments(record) for record in records]
+
+
+def test_babysit_reports_the_fix_and_its_resumed_checks_fix_as_delegated_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, _ = _fake_fix_clients(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", thread_id="PRRT_fix")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+    canned.joinpath("review-replies.json").write_text(
+        json.dumps({"PRRT_fix": {"fixed": True, "reply": "Fixed."}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FAKE_UV_FAIL_ONCE", "run ruff check .")
+    monkeypatch.setenv(
+        "FAKE_CODEX_RESUME_USAGE",
+        '{"input_tokens":150,"cached_input_tokens":100,"output_tokens":40}',
+    )
+
+    _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    runs = _delegated_runs(tmp_path / "coder", capsys)
+    assert [(run["client"], run["source"], run["outcome"]) for run in runs] == [
+        ("codex", "chatgpt-subscription", "completed"),
+        ("codex", "chatgpt-subscription", "completed"),
+    ]
+    assert [(run["input"], run["output"], run["cache_read"]) for run in runs] == [
+        ("90", "25", "60"),
+        ("60", "15", "40"),
+    ]
 
 
 def test_fix_run_uses_the_routine_model_effort_and_timeout(

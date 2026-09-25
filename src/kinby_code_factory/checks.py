@@ -17,6 +17,7 @@ from kinby_code_factory.clients import (
 )
 from kinby_code_factory.config import Checks
 from kinby_code_factory.process import CommandError, run_command
+from kinby_code_factory.runs import RunReporter
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ def run_checks_with_fix(
     model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
+    reporter: RunReporter,
     client: CodingClient = CodingClient.CODEX,
 ) -> tuple[ChecksPassed, CodingRun | None]:
     """Run repository checks and make one coding client fix attempt after a failure."""
@@ -89,6 +91,7 @@ def run_checks_with_fix(
             model=model,
             effort=effort,
             timeout_seconds=timeout_seconds,
+            reporter=reporter,
         )
     except (CommandError, CodingClientError) as fix_error:
         raise ChecksFixFailed(failed_first, None, str(fix_error)) from fix_error

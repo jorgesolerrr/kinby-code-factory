@@ -1,5 +1,6 @@
 """Run the delegated issue-to-pull-request pipeline."""
 
+import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 from time import monotonic
@@ -39,6 +40,7 @@ from kinby_code_factory.repository import (
     github_environment,
 )
 from kinby_code_factory.review import ReviewLoop, ReviewRound, run_review_loop
+from kinby_code_factory.runs import RunReporter, tool_run_reporter
 from kinby_code_factory.scan import (
     labeled_issue_number,
     oldest_eligible_issue,
@@ -105,8 +107,17 @@ type PipelineReport = OpenedPipelineReport | FailedPipelineReport
 
 
 @tool(write=True)
-def implement_ready_issue(signal: dict[str, object], context: ToolContext) -> str | None:
+async def implement_ready_issue(signal: dict[str, object], context: ToolContext) -> str | None:
     """Implement the oldest ready issue and open its pull request."""
+    reporter = tool_run_reporter(context)
+    return await asyncio.to_thread(_implement_ready_issue, signal, context, reporter)
+
+
+def _implement_ready_issue(
+    signal: dict[str, object],
+    context: ToolContext,
+    reporter: RunReporter,
+) -> str | None:
     if not payload_can_change_eligibility(signal):
         return None
     config = factory_config(context)
@@ -162,6 +173,7 @@ def implement_ready_issue(signal: dict[str, object], context: ToolContext) -> st
             model=implementer.model,
             effort=implementer.effort,
             timeout_seconds=implementer.timeout_seconds,
+            reporter=reporter,
         )
         if reviewing is not None:
             review = run_review_loop(
@@ -179,6 +191,7 @@ def implement_ready_issue(signal: dict[str, object], context: ToolContext) -> st
                 round_limit=reviewer.round_limit,
                 review_timeout_seconds=reviewer.timeout_seconds,
                 fix_timeout_seconds=implementer.fix_timeout_seconds,
+                reporter=reporter,
             )
         try:
             passed_checks, check_fix = run_checks_with_fix(
@@ -189,6 +202,7 @@ def implement_ready_issue(signal: dict[str, object], context: ToolContext) -> st
                 model=implementer.model,
                 effort=implementer.effort,
                 timeout_seconds=implementer.fix_timeout_seconds,
+                reporter=reporter,
             )
         except ChecksFixFailed as exc:
             checks = exc.checks
@@ -204,6 +218,7 @@ def implement_ready_issue(signal: dict[str, object], context: ToolContext) -> st
                 model=reviewer.model,
                 effort=reviewer.effort,
                 timeout_seconds=reviewer.timeout_seconds,
+                reporter=reporter,
             )
             review = ReviewLoop(
                 (
