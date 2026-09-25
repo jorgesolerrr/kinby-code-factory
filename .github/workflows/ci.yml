@@ -1,6 +1,6 @@
 # Checks every pull request and every push to main against kinby main. A green push to
-# main then builds the coder image from that commit, runs the package check inside it,
-# and updates the coder through the hub. A failure at any step deploys nothing.
+# main then builds the coder image from that commit, checks the package and Bun inside
+# it, and updates the coder through the hub. A failure at any step deploys nothing.
 name: CI
 
 on:
@@ -39,6 +39,8 @@ jobs:
         run: scripts/build-image.sh kinby "$GITHUB_SHA" kinby-coder:candidate
       - name: Run the package check inside the image
         run: docker run --rm --entrypoint kinby kinby-coder:candidate package check coder
+      - name: Check Bun runs inside the image
+        run: docker run --rm --entrypoint bun kinby-coder:candidate --version
 
   update-coder:
     needs: image
