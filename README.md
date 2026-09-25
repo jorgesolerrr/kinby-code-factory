@@ -13,7 +13,7 @@ The distribution ships the routines' code steps, the skills they use, and an ins
 ## What it needs
 
 - kinby, from the same image. The package depends on `kinby` without a pin.
-- `claude`, `codex`, `gh` and `git` on `PATH`. [`image/recipe.Dockerfile`](image/recipe.Dockerfile) adds them to kinby's base image.
+- `claude`, `codex`, `gh`, `git` and `bun` on `PATH`. [`image/recipe.Dockerfile`](image/recipe.Dockerfile) adds them to kinby's base image.
 - Secrets in the instance's `.env`: `GH_TOKEN` and `GITHUB_WEBHOOK_SECRET`.
 - A logged-in coding client. See [docs/setup.md](docs/setup.md).
 

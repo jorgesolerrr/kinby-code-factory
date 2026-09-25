@@ -4,6 +4,8 @@ This guide creates an instance of package `coder`, logs in its coding clients, a
 
 Two routes lead to the same instance: through a kinby hub, or by hand with Docker. Both use an image built from kinby's base image plus [`image/recipe.Dockerfile`](../image/recipe.Dockerfile), with this package installed at one commit.
 
+The recipe adds pinned versions of gh, Claude Code, Codex and Bun to kinby's base image, which already has git, Python and uv. Bun is there for repositories with a TypeScript side, so the checks in `package.yaml` can run `bun` commands.
+
 ## What you need
 
 - A GitHub repository for the factory to work in, and a token with `repo` scope for it.
