@@ -57,6 +57,8 @@ jobs:
         if: env.KINBY_HUB_URL == ''
         run: echo "::notice::KINBY_HUB_URL is not set, so this push updates nothing."
       - if: env.KINBY_HUB_URL != ''
+        uses: actions/checkout@v5
+      - if: env.KINBY_HUB_URL != ''
         uses: astral-sh/setup-uv@v6
       - name: Update the coder to this commit
         if: env.KINBY_HUB_URL != ''
@@ -65,9 +67,11 @@ jobs:
           KINBY_CODER_INSTANCE_ID: ${{ secrets.KINBY_CODER_INSTANCE_ID }}
           KINBY_REVISION: ${{ needs.image.outputs.kinby-revision }}
         # The kinby revision is the one the image was checked against. The hub builds
-        # it from its own checkout, which has to have fetched it.
+        # it from its own checkout, which has to have fetched it. The recipe travels with
+        # the pin, because the hub otherwise keeps the one it recorded at creation.
         run: >-
           uvx --from "git+https://github.com/jorgesolerrr/kinby@$KINBY_REVISION" kinby hub update
           --connect "$KINBY_HUB_URL" "$KINBY_CODER_INSTANCE_ID"
           --revision "$KINBY_REVISION"
           --package coder --package-commit "$GITHUB_SHA"
+          --image-recipe image/recipe.Dockerfile

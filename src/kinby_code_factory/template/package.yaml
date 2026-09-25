@@ -47,7 +47,9 @@ babysitting:
 checks:
   # Commands that must pass, in order, before a pull request opens or a fix is pushed.
   # Each runs in the workspace without a shell. One failure gets one repair attempt.
-  # These are the kinby repository's checks. Replace them with your repository's.
+  # These are the uv checks of a Python repository. kinby's own coder runs
+  # `bun install --frozen-lockfile` and `bun run check`, which cover these and the web
+  # app. Replace them with your repository's.
   commands:
     - uv run ruff check .
     - uv run ruff format --check .
