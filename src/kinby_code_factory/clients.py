@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -300,7 +300,7 @@ def _run_reported(
         reporter.report(observe(exc.stdout, exc.duration_seconds))
         raise
     except CommandTimedOut as exc:
-        reporter.report(observe("", exc.timeout_seconds))
+        reporter.report(observe(exc.stdout, exc.timeout_seconds))
         raise
     reporter.report(observe(result.stdout, result.duration_seconds))
     return result
@@ -348,6 +348,8 @@ def _claude_run(
     """What a Claude stream says about its run, whatever state the stream is in.
 
     Tokens come from ``modelUsage``, which covers subagents; ``usage`` covers the main loop only.
+    A stream cut off before its result, as when the run is killed at its limit, counts the
+    messages it already carried.
     """
     events = _json_events(source)
     result = _claude_final_event(source)
@@ -367,19 +369,59 @@ def _claude_run(
         ),
         None,
     )
-    session = result.get("session_id") if result is not None else None
-    turns = result.get("num_turns") if result is not None else None
+    if result is None:
+        # Streamed counts are not the session's running total, so they set no reading.
+        messages = _claude_messages(events)
+        session = None
+        tokens = _claude_streamed_tokens(messages.values()) if messages else None
+        turns = len(messages)
+    else:
+        session = result.get("session_id")
+        tokens = _claude_model_tokens(result.get("modelUsage"))
+        turns = _count(result.get("num_turns"))
     return ClientRun(
         usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
         client=_CLAUDE_CODE,
         model=model,
         session=session if keeps_session and isinstance(session, str) else None,
-        tokens=_claude_model_tokens(result.get("modelUsage")) if result is not None else None,
+        tokens=tokens,
         duration_seconds=duration_seconds,
-        client_turns=turns if type(turns) is int and turns >= 0 else 0,
+        client_turns=turns,
         outcome=_outcome(succeeded=succeeded, resets_at=resets_at),
         resets_at=None if succeeded else resets_at,
     )
+
+
+def _claude_messages(events: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    """Each streamed assistant message once; a message repeats for every content block."""
+    return {
+        message_id: message
+        for event in events
+        if event.get("type") == "assistant"
+        and isinstance(message := event.get("message"), dict)
+        and isinstance(message_id := message.get("id"), str)
+    }
+
+
+def _claude_streamed_tokens(messages: Iterable[dict[str, object]]) -> dict[str, ModelTokens]:
+    tokens: dict[str, ModelTokens] = {}
+    for message in messages:
+        usage = message.get("usage")
+        if not isinstance(model := message.get("model"), str) or not isinstance(usage, dict):
+            continue
+        uncached, output, read, created = (
+            _count(usage.get(name))
+            for name in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            )
+        )
+        streamed = ModelTokens(uncached + read + created, output, read, created)
+        earlier = tokens.get(model)
+        tokens[model] = streamed if earlier is None else earlier.plus(streamed)
+    return tokens
 
 
 def _claude_model_tokens(model_usage: object) -> dict[str, ModelTokens] | None:

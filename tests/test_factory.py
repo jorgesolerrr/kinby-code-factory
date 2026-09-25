@@ -265,10 +265,12 @@ record["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
 with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
 
+# The stream reaches stdout as the run goes, before any sleep and before the result.
+if (events := responses / "claude-events.jsonl").exists():
+    print(events.read_text(encoding="utf-8"), end="", flush=True)
+
+
 def emit(result):
-    events = responses / "claude-events.jsonl"
-    if events.exists():
-        print(events.read_text(encoding="utf-8"), end="")
     print(json.dumps(result))
     # Claude exits non-zero after an error result, with the stream already written.
     raise SystemExit(1 if result.get("is_error") else 0)

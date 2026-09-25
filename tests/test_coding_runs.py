@@ -16,6 +16,7 @@ from tests.test_factory import (
     _report,
     _RoutineModel,
     _use_routine_model,
+    configure,
 )
 
 _CLAUDE_LIMIT_RESET = 1_790_000_000
@@ -210,6 +211,61 @@ def test_a_claude_run_that_crashes_is_reported_failed(
     assert run["client"] == "claude-code"
     assert run["outcome"] == "failed"
     assert "resets_at" not in run
+
+
+def _assistant(message: str, model: str, usage: tuple[int, int, int, int]) -> str:
+    uncached, read, created, output = usage
+    return json.dumps(
+        {
+            "type": "assistant",
+            "session_id": "claude-session-184",
+            "message": {
+                "id": message,
+                "model": model,
+                "usage": {
+                    "input_tokens": uncached,
+                    "cache_read_input_tokens": read,
+                    "cache_creation_input_tokens": created,
+                    "output_tokens": output,
+                },
+            },
+        }
+    )
+
+
+def test_a_claude_run_killed_at_its_limit_reports_the_tokens_it_streamed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance, canned = _prepare(tmp_path, monkeypatch, client="claude")
+    configure(instance, implementation={"timeout_seconds": 1})
+    monkeypatch.setenv("FAKE_CLAUDE_IMPLEMENT_SLEEP", "10")
+    (canned / "claude-events.jsonl").write_text(
+        "\n".join(
+            (
+                json.dumps({"type": "system", "subtype": "init"}),
+                # One message streams one event per content block, each with the same usage.
+                _assistant("msg-1", "claude-opus-5-5", (2, 80, 38, 20)),
+                _assistant("msg-1", "claude-opus-5-5", (2, 80, 38, 20)),
+                _assistant("msg-2", "claude-opus-5-5", (1, 118, 5, 12)),
+                # A subagent's call on another model.
+                _assistant("msg-3", "claude-haiku-4-5", (10, 0, 0, 5)),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = _run(instance, capsys)
+
+    assert report["outcome"] == "failed"
+    assert "claude exceeded its 1-second limit" in str(report["failure_reason"])
+    (run,) = _delegated_runs(instance, capsys)
+    assert run["outcome"] == "failed"
+    assert run["models"] == "claude-opus-5-5,claude-haiku-4-5"
+    assert _tokens(run) == (254, 37, 198, 43)
+    assert int(run["duration_ms"]) >= 1000
 
 
 @pytest.mark.parametrize(

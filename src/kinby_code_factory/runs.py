@@ -19,6 +19,14 @@ class ModelTokens:
     cache_read_tokens: int
     cache_creation_tokens: int
 
+    def plus(self, other: ModelTokens) -> ModelTokens:
+        return ModelTokens(
+            self.input_tokens + other.input_tokens,
+            self.output_tokens + other.output_tokens,
+            self.cache_read_tokens + other.cache_read_tokens,
+            self.cache_creation_tokens + other.cache_creation_tokens,
+        )
+
     def minus(self, earlier: ModelTokens) -> ModelTokens:
         return ModelTokens(
             max(self.input_tokens - earlier.input_tokens, 0),
