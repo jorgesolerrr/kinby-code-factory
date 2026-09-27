@@ -11,12 +11,14 @@ from kinby.cli import main
 from kinby.instance import init_instance, load_instance
 from kinby.packages import (
     SetupFieldKind,
+    SetupFieldType,
     SetupTarget,
     TargetFile,
     installed_package,
     load_package,
     package_description,
     read_package_config,
+    value_problem,
 )
 from kinby.packages.check import check_package
 from kinby.plugins.routines import load_routines
@@ -111,11 +113,9 @@ this code, cancel.
 
 
 def test_the_wizard_asks_for_everything_a_coder_instance_needs() -> None:
-    package = load_package("coder").package
     description = package_description(installed_package(load_package("coder")))
     fields = {field.name: field for field in description.setup_fields}
 
-    assert package.required_secrets == ()
     assert fields["model"].default == "anthropic:claude-sonnet-5"
     assert fields["model"].target is None
     targets = {name: field.target for name, field in fields.items() if field.target}
@@ -128,6 +128,18 @@ def test_the_wizard_asks_for_everything_a_coder_instance_needs() -> None:
     secrets = {name for name, field in fields.items() if field.kind is SetupFieldKind.SECRET}
     assert secrets == {"api_key", "GH_TOKEN", "GITHUB_WEBHOOK_SECRET", "CLAUDE_CODE_OAUTH_TOKEN"}
     assert "claude setup-token" in fields["CLAUDE_CODE_OAUTH_TOKEN"].description
+
+
+def test_the_wizard_rejects_a_repository_that_is_not_a_url_and_an_email_that_is_not_one() -> None:
+    description = package_description(installed_package(load_package("coder")))
+    fields = {field.name: field for field in description.setup_fields}
+
+    assert value_problem(fields["repository"], "not a repository") is not None
+    assert value_problem(fields["repository"], "https://github.com/octo/widgets.git") is None
+    assert value_problem(fields["commit_email"], "not-an-email") is not None
+    assert value_problem(fields["commit_email"], "factory@example.test") is None
+    assert "https://github.com/<owner>/<repository>.git" in fields["repository"].description
+    assert fields["commit_name"].type is SetupFieldType.TEXT
 
 
 def test_codex_signs_in_through_the_app_into_its_own_volume() -> None:
@@ -294,7 +306,7 @@ def test_a_selected_skill_the_instance_lacks_fails_before_github_is_touched(
     ("change", "message"),
     [
         ({"review": {"rounds": 2}}, "review.rounds"),
-        ({"secrets": {"github_token": "OTHER_TOKEN"}}, "not a required secret"),
+        ({"secrets": {"github_token": "OTHER_TOKEN"}}, "not a secret field this package declares"),
         ({"checks": {"commands": ["  "]}}, "a check command cannot be empty"),
         ({"implementation": {"client": "cursor"}}, "implementation.client"),
     ],
