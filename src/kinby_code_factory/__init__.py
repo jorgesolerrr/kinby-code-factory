@@ -19,13 +19,19 @@ from kinby_code_factory.pipeline import implement_ready_issue
 ROOT = Path(__file__).parent
 
 
-def _config(name: str, label: str, description: str, target: SetupTarget) -> SetupField:
+def _config(
+    name: str,
+    label: str,
+    description: str,
+    type: SetupFieldType,
+    target: SetupTarget,
+) -> SetupField:
     return SetupField(
         name=name,
         label=label,
         description=description,
         kind=SetupFieldKind.CONFIG,
-        type=SetupFieldType.TEXT,
+        type=type,
         required=True,
         target=target,
     )
@@ -56,6 +62,7 @@ PACKAGE = Package(
             "Repository",
             "The git URL of the repository the factory clones and works in, like "
             "https://github.com/<owner>/<repository>.git.",
+            SetupFieldType.URL,
             SetupTarget(file=TargetFile.KINBY_TOML, key="workspace.source"),
         ),
         SetupField(
@@ -71,6 +78,7 @@ PACKAGE = Package(
             "commit_name",
             "Commit author name",
             "The name on the commits the coding clients make.",
+            SetupFieldType.TEXT,
             SetupTarget(file=TargetFile.PACKAGE_YAML, key="commit.name"),
         ),
         _config(
@@ -78,6 +86,7 @@ PACKAGE = Package(
             "Commit author email",
             "The email on the commits the coding clients make. Use one GitHub links to the "
             "token's account, so the commits show as its own.",
+            SetupFieldType.EMAIL,
             SetupTarget(file=TargetFile.PACKAGE_YAML, key="commit.email"),
         ),
         _secret(
