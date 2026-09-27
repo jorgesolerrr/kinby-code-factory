@@ -131,7 +131,7 @@ def _implement_ready_issue(
         timeout_seconds=config.commands.github_timeout_seconds,
         environment=environment,
     )
-    git = Git(context.workspace, config.commands.git_timeout_seconds, environment)
+    git = Git(context.workspace, config.commands.git_timeout_seconds, environment, config.commit)
     conventions = context.instance.manifest.workspace.conventions.instructions
     issue: Issue | None = None
     implementation: CodingRun | None = None

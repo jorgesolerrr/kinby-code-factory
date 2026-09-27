@@ -16,8 +16,7 @@ The distribution ships the routines' code steps, the skills they use, and an ins
 
 - kinby, from the same image. The package depends on `kinby` without a pin.
 - `claude`, `codex`, `gh`, `git` and `bun` on `PATH`. [`image/recipe.Dockerfile`](image/recipe.Dockerfile) adds them to kinby's base image.
-- Secrets in the instance's `.env`: `GH_TOKEN` and `GITHUB_WEBHOOK_SECRET`.
-- A logged-in coding client. See [docs/setup.md](docs/setup.md).
+- Secrets in the instance's `.env`: `GH_TOKEN`, `GITHUB_WEBHOOK_SECRET` and `CLAUDE_CODE_OAUTH_TOKEN`. kinby's web app asks for them when it creates the instance, and signs in Codex. See [docs/setup.md](docs/setup.md).
 
 ## Configuration
 
@@ -27,9 +26,8 @@ The workspace repository is set in `kinby.toml` under `[workspace].source`. The 
 
 ## Documentation
 
-- [docs/setup.md](docs/setup.md): create a factory instance, log in, and start it.
+- [docs/setup.md](docs/setup.md): create a factory instance from the web app, sign in, and start it.
 - [docs/migration.md](docs/migration.md): move the existing kinby coder onto this package.
-- [catalog/coder.json](catalog/coder.json): the entry for kinby's curated package list.
 
 ## Development
 

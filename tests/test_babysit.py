@@ -391,11 +391,14 @@ def _run_babysit(
     delivery: dict[str, object] | None,
     expected_exit_code: int = 0,
     babysitting: dict[str, object] | None = None,
+    commit: dict[str, object] | None = None,
 ) -> str:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
     monkeypatch.setenv("GH_TOKEN", "github-token")
     instance_path = _coder_copy(tmp_path)
     configure(instance_path, babysitting={"enabled": True, **(babysitting or {})})
+    if commit is not None:
+        configure(instance_path, commit=commit)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     arguments = [
@@ -1290,6 +1293,34 @@ def test_fix_run_uses_the_routine_model_effort_and_timeout(
     arguments = _arguments(codex)
     assert "gpt-test-fix" in arguments
     assert 'model_reasoning_effort="low"' in arguments
+
+
+def test_fix_round_commits_as_the_configured_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_fix_clients(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", thread_id="PRRT_fix")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+
+    _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+        commit={"name": "Widget factory", "email": "factory@example.test"},
+    )
+
+    commands = [[record["command"], *_arguments(record)] for record in _records(log)]
+    before_codex = commands[: next(i for i, c in enumerate(commands) if c[0] == "codex")]
+    assert ["git", "config", "user.name", "Widget factory"] in before_codex
+    assert ["git", "config", "user.email", "factory@example.test"] in before_codex
 
 
 def test_checks_fix_uses_its_routine_timeout(

@@ -1,15 +1,27 @@
 """A self-hoster initializes the factory from the installed package and runs it on any repo."""
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
 from kinby.cli import main
-from kinby.instance import load_instance
+from kinby.instance import init_instance, load_instance
+from kinby.packages import (
+    SetupFieldKind,
+    SetupTarget,
+    TargetFile,
+    installed_package,
+    load_package,
+    package_description,
+    read_package_config,
+)
+from kinby.packages.check import check_package
 from kinby.plugins.routines import load_routines
 
+from kinby_code_factory.config import CommitIdentity, FactoryConfig
 from tests.test_factory import (
     _arguments,
     _coder_copy,
@@ -78,6 +90,116 @@ def test_initialization_copies_an_editable_factory_that_matches_the_live_coder(
     }
     assert all(routine.arguments == {} for routine in routines)
     assert not (instance / "skills" / "implement-ticket").exists()
+
+
+# What `codex login --device-auth` prints, once the hub strips its terminal colors.
+CODEX_DEVICE_PROMPT = """
+Welcome to Codex [v0.154.0]
+OpenAI's command-line coding agent
+
+Follow these steps to sign in with ChatGPT using device code authorization:
+
+1. Open this link in your browser and sign in to your account
+   https://auth.openai.com/codex/device
+
+2. Enter this one-time code (expires in 15 minutes)
+   K7QD-M2XPA
+
+Continue only if you started this login in Codex. If a website or another person gave you
+this code, cancel.
+"""
+
+
+def test_the_wizard_asks_for_everything_a_coder_instance_needs() -> None:
+    package = load_package("coder").package
+    description = package_description(installed_package(load_package("coder")))
+    fields = {field.name: field for field in description.setup_fields}
+
+    assert package.required_secrets == ()
+    assert fields["model"].default == "anthropic:claude-sonnet-5"
+    assert fields["model"].target is None
+    targets = {name: field.target for name, field in fields.items() if field.target}
+    assert targets == {
+        "repository": SetupTarget(file=TargetFile.KINBY_TOML, key="workspace.source"),
+        "commit_name": SetupTarget(file=TargetFile.PACKAGE_YAML, key="commit.name"),
+        "commit_email": SetupTarget(file=TargetFile.PACKAGE_YAML, key="commit.email"),
+    }
+    assert all(fields[name].kind is SetupFieldKind.CONFIG for name in targets)
+    secrets = {name for name, field in fields.items() if field.kind is SetupFieldKind.SECRET}
+    assert secrets == {"api_key", "GH_TOKEN", "GITHUB_WEBHOOK_SECRET", "CLAUDE_CODE_OAUTH_TOKEN"}
+    assert "claude setup-token" in fields["CLAUDE_CODE_OAUTH_TOKEN"].description
+
+
+def test_codex_signs_in_through_the_app_into_its_own_volume() -> None:
+    (login,) = package_description(installed_package(load_package("coder"))).logins
+
+    assert login.id == "codex"
+    assert login.command == ["codex", "login", "--device-auth"]
+    assert login.volume == "/root/.codex"
+    found = re.search(login.prompt_pattern, CODEX_DEVICE_PROMPT)
+    assert found is not None
+    assert found["url"] == "https://auth.openai.com/codex/device"
+    assert found["code"] == "K7QD-M2XPA"
+
+
+def test_the_package_check_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_clients(tmp_path, monkeypatch)
+
+    failures = check_package("coder")
+
+    # An editable install records no template files; CI checks the installed wheel in the image.
+    assert [failure for failure in failures if "is not part of distribution" not in failure] == []
+
+
+def test_setup_values_land_where_the_descriptor_declares_them(tmp_path: Path) -> None:
+    instance = init_instance(
+        tmp_path / "coder",
+        "anthropic:claude-sonnet-5",
+        package=installed_package(load_package("coder")),
+        config={
+            "repository": "https://github.com/octo/widgets.git",
+            "commit_name": "Widget factory",
+            "commit_email": "factory@example.test",
+        },
+    )
+
+    assert load_instance(instance).manifest.workspace.source == (
+        "https://github.com/octo/widgets.git"
+    )
+    config = read_package_config(load_package("coder").package, instance)
+    assert isinstance(config, FactoryConfig)
+    assert config.commit == CommitIdentity(name="Widget factory", email="factory@example.test")
+
+
+def test_the_coding_clients_commit_as_the_configured_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance, log = _prepare(tmp_path, monkeypatch)
+    configure(instance, commit={"name": "Widget factory", "email": "factory@example.test"})
+
+    assert _run_implementation(instance, tmp_path) == 0
+
+    assert _report(capsys.readouterr().out)["outcome"] == "opened"
+    commands = [[record["command"], *_arguments(record)] for record in _records(log)]
+    before_claude = commands[: next(i for i, c in enumerate(commands) if c[0] == "claude")]
+    assert ["git", "config", "user.name", "Widget factory"] in before_claude
+    assert ["git", "config", "user.email", "factory@example.test"] in before_claude
+
+
+def test_without_a_configured_identity_git_keeps_its_own(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance, log = _prepare(tmp_path, monkeypatch)
+
+    assert _run_implementation(instance, tmp_path) == 0
+
+    assert _report(capsys.readouterr().out)["outcome"] == "opened"
+    git = [_arguments(record) for record in _records(log) if record["command"] == "git"]
+    assert not any(arguments[:1] == ["config"] for arguments in git)
 
 
 def test_initialization_refuses_a_nonempty_destination(tmp_path: Path) -> None:

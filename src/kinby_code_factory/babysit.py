@@ -153,7 +153,7 @@ def _babysit_pull_request(
         timeout_seconds=config.commands.github_timeout_seconds,
         environment=environment,
     )
-    git = Git(context.workspace, config.commands.git_timeout_seconds, environment)
+    git = Git(context.workspace, config.commands.git_timeout_seconds, environment, config.commit)
     signaled_pull_request = signal_pull_request_number(signal)
     signaled_branch = (
         repository.pull_request_branch(signaled_pull_request)

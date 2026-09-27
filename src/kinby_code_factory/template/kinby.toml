@@ -1,5 +1,6 @@
 # The software factory. Its workspace is the repository it implements issues in.
-# Set [workspace].source before the first start. Secrets live in .env, never here.
+# The create wizard sets [workspace].source; set it yourself before the first start when
+# you create the instance by hand. Secrets live in .env, never here.
 # Factory settings live in package.yaml.
 
 [models]

@@ -59,6 +59,11 @@ class Skills(PackageConfig):
     review: Name
 
 
+class CommitIdentity(PackageConfig):
+    name: Name
+    email: Name
+
+
 class Commands(PackageConfig):
     git_timeout_seconds: Seconds
     github_timeout_seconds: Seconds
@@ -74,6 +79,8 @@ class FactoryConfig(PackageConfig):
     checks: Checks
     skills: Skills
     commands: Commands
+    # An instance made before the setup wizard has no commit section; git keeps its own identity.
+    commit: CommitIdentity | None = None
 
 
 def factory_config(context: ToolContext) -> FactoryConfig:

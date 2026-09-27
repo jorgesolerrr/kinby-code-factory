@@ -34,7 +34,7 @@ def configure(instance: Path, **sections: dict[str, object]) -> None:
     path = instance / "package.yaml"
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
     for section, values in sections.items():
-        config[section].update(values)
+        config.setdefault(section, {}).update(values)
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
 

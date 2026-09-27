@@ -6,6 +6,12 @@ secrets:
   # value as GH_TOKEN. The token itself lives in .env, never here.
   github_token: GH_TOKEN
 
+# The identity on the commits the coding clients make. The create wizard writes it. Without
+# it, git in the workspace commits with whatever identity it already has.
+# commit:
+#   name: Software factory
+#   email: factory@example.com
+
 implementation:
   # The coding client that implements an issue: claude (Claude Code) or codex.
   client: claude

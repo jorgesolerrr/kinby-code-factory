@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kinby_code_factory.clients import PR_BODY, REVIEW_REPLIES, Findings
+from kinby_code_factory.config import CommitIdentity
 from kinby_code_factory.process import CommandError, CommandResult, run_command
 from kinby_code_factory.repository import (
     AGENT_BRANCH_PREFIX,
@@ -23,11 +24,13 @@ _SCRATCH_EXCLUDE = ".scratch/"
 
 @dataclass(frozen=True)
 class Git:
-    """Git in the persistent workspace, with its time limit and GitHub credentials."""
+    """Git in the persistent workspace, with its time limit, GitHub credentials, and the
+    identity the coding clients commit as. Without one, git keeps its own."""
 
     workspace: Path
     timeout_seconds: float
     environment: Mapping[str, str]
+    identity: CommitIdentity | None
 
     def __call__(self, *arguments: str) -> CommandResult:
         return run_command(
@@ -60,6 +63,7 @@ def prepare_branch(git: Git, branch: BranchName, base_branch: BranchName) -> Non
     git("fetch", "--prune", "origin")
     git("switch", "--discard-changes", "-C", branch, f"origin/{base_branch}")
     _clean_workspace(git)
+    _set_identity(git)
 
 
 def checkout_branch(git: Git, branch: BranchName) -> None:
@@ -74,6 +78,15 @@ def checkout_branch(git: Git, branch: BranchName) -> None:
         f"origin/{branch}",
     )
     _clean_workspace(git)
+    _set_identity(git)
+
+
+def _set_identity(git: Git) -> None:
+    """Record the identity in the workspace's own git config, which every committer reads."""
+    if git.identity is None:
+        return
+    git("config", "user.name", git.identity.name)
+    git("config", "user.email", git.identity.email)
 
 
 def current_commit(git: Git) -> CommitSha:
