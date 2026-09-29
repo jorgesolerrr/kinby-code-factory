@@ -182,7 +182,7 @@ def _babysit_pull_request(
         listed = pull_request.listed
         outcome = outcomes[listed.number]
         action = actions_by_pull_request.get(listed.number)
-        if action is not None and action.request_review:
+        if action is not None and action.request_review and metadata.maintainer is not None:
             repository.request_review(listed.number, metadata.maintainer)
         if outcome is not BabysitOutcome.MERGE_READY and MERGE_READY_LABEL in listed.labels:
             repository.remove_pull_request_label(listed.number, MERGE_READY_LABEL)
@@ -293,7 +293,7 @@ def _run_fix_round(
     git: Git,
     pull_request: BabysitPullRequest,
     coder: GitHubLogin,
-    maintainer: GitHubLogin,
+    maintainer: GitHubLogin | None,
     default_branch: BranchName,
     babysitting: Babysitting,
     repository_checks: Checks,
@@ -308,7 +308,9 @@ def _run_fix_round(
     checks: ChecksPassed | ChecksFailed | None = None
     try:
         threads = actionable_threads(pull_request.threads, coder)
-        trusted_authors = {maintainer, "greptile-apps", "greptile-apps[bot]"}
+        trusted_authors = {"greptile-apps", "greptile-apps[bot]"}
+        if maintainer is not None:
+            trusted_authors.add(maintainer)
         if any(thread.comments[-1].author not in trusted_authors for thread in threads):
             raise CodingClientError("review feedback from an untrusted author needs a human")
         repository.comment_on_pull_request(
@@ -447,7 +449,7 @@ def _combined_codex_run(first: CodingRun, second: CodingRun) -> CodingRun:
 def _select_babysit_actions(
     pull_requests: tuple[BabysitPullRequest, ...],
     coder: GitHubLogin,
-    maintainer: GitHubLogin,
+    maintainer: GitHubLogin | None,
     round_limit: int,
 ) -> tuple[_BabysitAction, ...]:
     """Return completed outcomes that still need a label or review request."""
@@ -463,6 +465,7 @@ def _select_babysit_actions(
         request_review = (
             outcome is BabysitOutcome.MERGE_READY
             and coder != pull_request.listed.author
+            and maintainer is not None
             and maintainer not in pull_request.listed.requested_reviewers
             and not any(
                 review.author == maintainer and review.commit == pull_request.listed.head

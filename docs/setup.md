@@ -89,6 +89,6 @@ gh webhook forward --repo <owner>/<repository> --events issues,pull_request \
 
 ## Check that it works
 
-Label a small issue `ready-for-agent`. The factory branches from the default branch, implements it, runs the configured checks, and opens a pull request that closes the issue. A failure removes the label, adds `ready-for-human`, and comments the reason on the issue.
+Label a small issue `ready-for-agent`. The factory branches from the default branch, implements it, runs the configured checks, and opens a pull request that closes the issue. In a repository a user owns, the pull request requests that user's review. GitHub cannot ask an organization for a review, so in an organization's repository it requests none. A failure removes the label, adds `ready-for-human`, and comments the reason on the issue.
 
 A missing `GH_TOKEN` fails the run with that name in the error. A Claude Code login that expired fails the issue's run and labels it `ready-for-human`. Neither reports "no work".
