@@ -154,7 +154,8 @@ def _fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     monkeypatch.setenv("FAKE_GITHUB_LOG", str(log))
     monkeypatch.setenv("FAKE_GITHUB_RESPONSES", str(canned))
     (canned / "repository.txt").write_text(
-        '{"name":"kinby","owner":{"login":"jorgesolerrr"},"defaultBranchRef":{"name":"main"}}\n',
+        '{"name":"kinby","owner":{"login":"jorgesolerrr"},"isInOrganization":false,'
+        '"defaultBranchRef":{"name":"main"}}\n',
         encoding="utf-8",
     )
     (canned / "user.txt").write_text("kinby-coder\n", encoding="utf-8")
@@ -500,6 +501,7 @@ def test_scan_reads_review_thread_location_and_comment_body(
             GitHubLogin("jorgesolerrr"),
             RepositoryName("kinby"),
             BranchName("main"),
+            GitHubLogin("jorgesolerrr"),
         ),
     )
     (thread,) = pull_request.threads
@@ -565,6 +567,41 @@ def test_answered_review_labels_the_pull_request_merge_ready(
     graphql = next(arguments for arguments in calls if arguments[:2] == ["api", "graphql"])
     query = next(item.removeprefix("query=") for item in graphql if item.startswith("query="))
     assert "query BabysitReviewThreads" in query
+
+
+def test_organization_repository_labels_merge_ready_without_a_review_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    (canned / "repository.txt").write_text(
+        '{"name":"CEC-Agent","owner":{"login":"pb-cec"},"isInOrganization":true,'
+        '"defaultBranchRef":{"name":"main"}}\n',
+        encoding="utf-8",
+    )
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+        author="implementing-agent",
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert '"outcome":"merge_ready"' in output
+    calls = [_arguments(record) for record in _records(log)]
+    assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
+    assert not any("--add-reviewer" in arguments for arguments in calls)
+    graphql = next(arguments for arguments in calls if arguments[:2] == ["api", "graphql"])
+    assert "owner=pb-cec" in graphql
 
 
 def test_existing_merge_ready_label_does_not_hide_a_missing_review_request(

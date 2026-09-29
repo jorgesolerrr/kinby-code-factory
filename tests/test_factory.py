@@ -404,6 +404,7 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
             {
                 "name": "kinby",
                 "owner": {"login": "jorgesolerrr"},
+                "isInOrganization": False,
                 "defaultBranchRef": {"name": "main"},
             }
         ),
@@ -1322,6 +1323,39 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
         for record in records
     )
     assert len(model.messages) == 1
+
+
+def test_organization_repository_opens_the_pull_request_without_a_reviewer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    (tmp_path / "canned" / "repository.json").write_text(
+        json.dumps(
+            {
+                "name": "CEC-Agent",
+                "owner": {"login": "pb-cec"},
+                "isInOrganization": True,
+                "defaultBranchRef": {"name": "main"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
+
+    assert _report(capsys.readouterr().out)["outcome"] == "opened"
+    create = next(
+        _arguments(record)
+        for record in _records(log)
+        if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
+    )
+    assert "--reviewer" not in create
 
 
 def test_hard_review_finding_resumes_codex_and_reviews_the_fix(

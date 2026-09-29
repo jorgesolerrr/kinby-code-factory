@@ -111,9 +111,12 @@ class OpenedPullRequest:
 class RepositoryMetadata:
     """The identity and default branch of a GitHub repository."""
 
-    maintainer: GitHubLogin
+    owner: GitHubLogin
     name: RepositoryName
     default_branch: BranchName
+    #: Who reviews agent pull requests: the owner of a user's repository. GitHub cannot ask
+    #: an organization for a review, so an organization's repository has no maintainer.
+    maintainer: GitHubLogin | None
 
 
 @dataclass(frozen=True)
@@ -261,7 +264,9 @@ class GitHubRepository:
         return source.rstrip("\n")
 
     def metadata(self) -> RepositoryMetadata:
-        return _metadata(self._gh("repo", "view", "--json", "name,owner,defaultBranchRef"))
+        return _metadata(
+            self._gh("repo", "view", "--json", "name,owner,isInOrganization,defaultBranchRef")
+        )
 
     def current_login(self) -> GitHubLogin:
         """Return the login used by the GitHub CLI."""
@@ -366,8 +371,9 @@ class GitHubRepository:
         base_branch: BranchName,
         title: IssueTitle,
         body_file: Path,
-        reviewer: GitHubLogin,
+        reviewer: GitHubLogin | None,
     ) -> OpenedPullRequest:
+        reviewers = ("--reviewer", reviewer) if reviewer is not None else ()
         url = PullRequestUrl(
             self._gh(
                 "pr",
@@ -380,8 +386,7 @@ class GitHubRepository:
                 title,
                 "--body-file",
                 str(body_file),
-                "--reviewer",
-                reviewer,
+                *reviewers,
             ).strip()
         )
         match = _PULL_REQUEST_URL_NUMBER.search(url)
@@ -449,7 +454,7 @@ class GitHubRepository:
                 "-f",
                 f"query={_REVIEW_THREADS_QUERY}",
                 "-F",
-                f"owner={metadata.maintainer}",
+                f"owner={metadata.owner}",
                 "-F",
                 f"name={metadata.name}",
                 "-F",
@@ -659,17 +664,24 @@ def _metadata(source: str) -> RepositoryMetadata:
         raise RepositoryResponseError("gh repo view returned a non-object JSON value")
     owner = value.get("owner")
     name = value.get("name")
+    organization = value.get("isInOrganization")
     default_branch = value.get("defaultBranchRef")
     if not isinstance(owner, dict) or not isinstance(default_branch, dict):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
-    maintainer = owner.get("login")
+    login = owner.get("login")
     branch = default_branch.get("name")
-    if not isinstance(maintainer, str) or not isinstance(name, str) or not isinstance(branch, str):
+    if (
+        not isinstance(login, str)
+        or not isinstance(name, str)
+        or not isinstance(organization, bool)
+        or not isinstance(branch, str)
+    ):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
     return RepositoryMetadata(
-        GitHubLogin(maintainer),
+        GitHubLogin(login),
         RepositoryName(name),
         BranchName(branch),
+        None if organization else GitHubLogin(login),
     )
 
 
