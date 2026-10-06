@@ -158,6 +158,10 @@ def _implement_ready_issue(
         if selected is None:
             return None
         issue = selected
+        if untrusted := repository.untrusted_authors(issue):
+            raise CodingClientError(
+                f"ticket text from untrusted authors needs a human: {', '.join(untrusted)}"
+            )
         siblings = sibling_pull_requests(issue, issues, pull_requests)
         metadata = repository.metadata()
         base_branch = siblings[-1].branch if siblings else metadata.default_branch

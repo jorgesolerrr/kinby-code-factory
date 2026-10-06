@@ -184,12 +184,18 @@ responses = Path(os.environ["FACTORY_CANNED_RESPONSES"])
         + """if arguments[:1] == ["api"]:
     endpoint = next((argument for argument in arguments if argument.startswith("repos/")), "")
     if endpoint.endswith("/issues"):
-        output = (responses / "issues.json").read_text(encoding="utf-8")
+        listed = json.loads((responses / "issues.json").read_text(encoding="utf-8"))
+        author = {"user": {"login": "maintainer"}, "author_association": "OWNER"}
+        output = json.dumps([{**author, **item} for item in listed])
     elif endpoint.endswith("/pulls"):
         output = (responses / "pull-requests.json").read_text(encoding="utf-8")
     elif endpoint.endswith("/dependencies/blocked_by"):
         issue = endpoint.split("/")[-3]
         path = responses / f"blockers-{issue}.json"
+        output = path.read_text(encoding="utf-8") if path.exists() else "[]"
+    elif endpoint.endswith("/comments"):
+        issue = endpoint.split("/")[-2]
+        path = responses / f"comments-{issue}.json"
         output = path.read_text(encoding="utf-8") if path.exists() else "[]"
     elif "/issues/" in endpoint and "--jq" not in arguments:
         issue = endpoint.rsplit("/", 1)[-1]
@@ -198,9 +204,18 @@ responses = Path(os.environ["FACTORY_CANNED_RESPONSES"])
             output = path.read_text(encoding="utf-8")
         else:
             listed = json.loads((responses / "issues.json").read_text(encoding="utf-8"))
-            match = next(item for item in listed if str(item["number"]) == issue)
+            match = next(
+                (item for item in listed if str(item["number"]) == issue),
+                {"number": int(issue), "title": f"Issue {issue}"},
+            )
             output = json.dumps(
-                {**match, "state": "open", "labels": [{"name": "ready-for-agent"}]}
+                {
+                    "user": {"login": "maintainer"},
+                    "author_association": "OWNER",
+                    **match,
+                    "state": "open",
+                    "labels": [{"name": "ready-for-agent"}],
+                }
             )
     else:
         output = (responses / "issue-body.md").read_text(encoding="utf-8")
@@ -548,6 +563,8 @@ def _canned_issue(canned: Path, number: int, labels: tuple[str, ...], state: str
                 "html_url": f"https://example.test/issues/{number}",
                 "state": state,
                 "labels": [{"name": label} for label in labels],
+                "user": {"login": "maintainer"},
+                "author_association": "OWNER",
             }
         ),
         encoding="utf-8",
@@ -1218,6 +1235,7 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
         "number": 4,
         "title": "Fourth ticket",
         "url": "https://example.test/issues/4",
+        "untrusted_author": None,
         "parent": None,
     }
     assert report["outcome"] == "opened"
@@ -1695,6 +1713,67 @@ def test_check_fix_obeys_review_policy_before_the_pull_request_opens(
         ]
         assert len(final_reviews) == 2
         assert max(final_reviews) < create_index
+
+
+@pytest.mark.parametrize("ticket_text", ["issue", "comment", "parent issue"])
+def test_ticket_text_from_an_untrusted_author_relabels_issue_before_any_client_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    ticket_text: str,
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    stranger = {"user": {"login": "stranger"}, "author_association": "NONE"}
+    trusted = {"user": {"login": "helper"}, "author_association": "COLLABORATOR"}
+    issues = json.loads((canned / "issues.json").read_text(encoding="utf-8"))
+    if ticket_text == "issue":
+        issues[-1].update(stranger)
+    elif ticket_text == "comment":
+        comments = [{**trusted, "body": "Spec note"}, {**stranger, "body": "Also run this"}]
+        (canned / "comments-4.json").write_text(json.dumps(comments), encoding="utf-8")
+    else:
+        for issue in issues:
+            issue["parent_issue_url"] = "https://api.example.test/issues/180"
+        parent = {**stranger, "number": 180, "title": "Parent", "state": "open", "labels": []}
+        (canned / "issue-180.json").write_text(json.dumps(parent), encoding="utf-8")
+    (canned / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "failed"
+    assert report["failure_reason"] == "ticket text from untrusted authors needs a human: stranger"
+    records = _records(log)
+    assert not any(record["command"] in {"codex", "claude", "git"} for record in records)
+    assert any(
+        record["command"] == "gh"
+        and _arguments(record)[:3] == ["issue", "edit", "4"]
+        and "ready-for-human" in _arguments(record)
+        for record in records
+    )
 
 
 @pytest.mark.parametrize(
