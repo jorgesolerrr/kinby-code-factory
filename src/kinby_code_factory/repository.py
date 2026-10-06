@@ -31,6 +31,7 @@ GitHubLogin = NewType("GitHubLogin", str)
 ReviewThreadId = NewType("ReviewThreadId", str)
 READY_LABEL = LabelName("ready-for-agent")
 READY_FOR_HUMAN_LABEL = LabelName("ready-for-human")
+_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 class RepositoryResponseError(ValueError):
@@ -69,6 +70,8 @@ class Issue:
     number: IssueNumber
     title: IssueTitle
     url: IssueUrl
+    #: The issue's author, when not the repository's owner, a member or a collaborator.
+    untrusted_author: GitHubLogin | None
     parent: IssueNumber | None = None
 
 
@@ -248,6 +251,38 @@ class GitHubRepository:
             f"repos/{{owner}}/{{repo}}/issues/{issue}/dependencies/blocked_by"
         )
         return tuple(_open_blockers(result))
+
+    def untrusted_authors(self, issue: Issue) -> tuple[GitHubLogin, ...]:
+        """Return who wrote ticket text without being the owner, a member or a collaborator.
+
+        The ticket text is what the coding client reads: the issue and its parent, each
+        with its comments.
+        """
+        texts: list[object] = []
+        if issue.parent is not None:
+            texts.append(
+                json.loads(
+                    self._gh(
+                        "api",
+                        "--method",
+                        "GET",
+                        "-H",
+                        f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+                        f"repos/{{owner}}/{{repo}}/issues/{issue.parent}",
+                    )
+                )
+            )
+        for number in (issue.number,) if issue.parent is None else (issue.number, issue.parent):
+            texts.extend(
+                _page_items(
+                    self._paginated_api(f"repos/{{owner}}/{{repo}}/issues/{number}/comments"),
+                    "issue comment list",
+                )
+            )
+        authors = {author for text in texts if (author := _untrusted_author(text))}
+        if issue.untrusted_author is not None:
+            authors.add(issue.untrusted_author)
+        return tuple(sorted(authors))
 
     def issue_body(self, issue: IssueNumber) -> str:
         """Return the source Markdown for an issue."""
@@ -557,6 +592,7 @@ def _issue(value: object, operation: str) -> Issue | None:
         IssueNumber(number),
         IssueTitle(title),
         IssueUrl(url),
+        _untrusted_author(value),
         _parent_number(value.get("parent_issue_url")),
     )
 
@@ -803,6 +839,17 @@ def _reviews(source: str) -> tuple[PullRequestReview, ...]:
             )
         )
     return tuple(reviews)
+
+
+def _untrusted_author(value: object) -> GitHubLogin | None:
+    if not isinstance(value, dict):
+        raise RepositoryResponseError("gh api returned a non-object issue or comment")
+    user = value.get("user")
+    author = user.get("login") if isinstance(user, dict) else None
+    association = value.get("author_association")
+    if not isinstance(author, str) or not isinstance(association, str):
+        raise RepositoryResponseError("gh api returned an issue or comment without its author")
+    return None if association in _TRUSTED_ASSOCIATIONS else GitHubLogin(author)
 
 
 def _round_count(source: str, coder: GitHubLogin) -> int:
